@@ -1,0 +1,434 @@
+# Setup environment and libraries -----------------------------------------
+rm(list = ls())
+require(plyr)
+require(data.table)
+require(xlsx)
+require(beeswarm)
+require(ggplot2)
+require(gridExtra)
+require(grid)
+require(ggbeeswarm)
+
+folder <- choose.dir()
+setwd(folder)
+files <- dir(folder)
+flirFiles <- grep("^Flir", files)
+matlabFiles <- grep("^Matlab", files)
+
+# Functions ---------------------------------------------------------------
+
+## Summarizes data.
+## Gives count, mean, standard deviation, standard error of the mean, and
+## confidence interval (default 95%).
+##   data: a data frame.
+##   measurevar: the name of a column that contains the variable to be summarized
+##   groupvars: a vector containing names of columns that contain grouping variables
+##   na.rm: a boolean that indicates whether to ignore NA's
+##   conf.interval: the percent range of the confidence interval (default is 95%)
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  library(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Rename the "mean" column    
+  datac <- rename(datac, c("mean" = measurevar))
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+
+# Saves results of e.g. t-tests to text files
+saveResults <- function(filepath,data2save){
+  con <- file(filepath)
+  on.exit(close(con))
+  char = capture.output(data2save)
+  writeLines(char, con)
+}
+
+# Calculates the population SD
+sd.p=function(x){sd(x)*sqrt((length(x)-1)/length(x))}
+
+# Import data and add method column before combining ----------------------
+dataFlir <- lapply(files[flirFiles], read.csv)
+dataFlir <- lapply(dataFlir, cbind, method="Flir")
+
+dataMatlab <- lapply(files[matlabFiles], read.csv)
+dataMatlab <- lapply(dataMatlab, cbind, method="Matlab")
+
+dataList <- append(dataFlir, dataMatlab)
+dt <- data.table(ldply(dataList, data.frame))
+rm(dataFlir, dataMatlab, files, flirFiles, matlabFiles, dataList)
+
+# read timings.xlsx for efficiency
+timings <- data.table(read.xlsx('../Times&Notes.xlsx',1))
+timings <- timings[Time!="NA",names(timings) %in% c("Name", "Set", "Method", "Time"), with = F]
+timings[,Time:=as.numeric(as.character(Time))*24*60]
+timings[,secPerIm := (Time*60)/31]
+
+# Subset visit 1 images used in v2/v3 and relabel to match ------------------------
+dtV2V3 <- dt[visit == "Visit2" | visit == "Visit3",]
+dtV1_A <- dt[visit == "Visit1" & set == "SetA" & num %in% c(1:3,5,26:29),]
+dtV1_B <- dt[visit == "Visit1" & set == "SetB" & num %in% c(1:4,28:31),]
+
+setkey(dtV1_A,num)
+dtV1_A[num == 5, num := 4]
+dtV1_A[num == 26, num := 5]
+dtV1_A[num == 27, num := 6]
+dtV1_A[num == 28, num := 7]
+dtV1_A[num == 29, num := 8]
+
+setkey(dtV1_B,num)
+dtV1_B[num == 28, num := 5]
+dtV1_B[num == 29, num := 6]
+dtV1_B[num == 30, num := 7]
+dtV1_B[num == 31, num := 8]
+
+dt2 <- rbind(dtV1_A, dtV1_B, dtV2V3)
+dt2[,X:=NULL]
+rm(dtV1_A,dtV1_B,dtV2V3)
+
+
+# Efficiency --------------------------------------------------------------
+setwd('../Output')
+
+eff_anova <- aov(secPerIm ~ Method*Set, data = timings)
+saveResults('efficiency anova (with interaction).txt', summary(eff_anova))
+
+#interaction not significant - rerun without interaction
+eff_anova2 <- aov(secPerIm ~ Method+Set, data = timings)
+saveResults('efficiency anova (no interaction).txt', summary(eff_anova2))
+
+#posthoc analysis
+saveResults('efficiency Tukey (no interaction).txt', TukeyHSD(eff_anova2))
+
+# improvement in speed
+(timings[, mean(secPerIm), by = Method][,V1][1]-timings[, mean(secPerIm), by = Method][,V1][2])/timings[, mean(secPerIm), by = Method][,V1][1]
+
+## Draw beeswarm with mean+/-SD of image analysis rate
+par(xpd=T)
+par(cex = 1)
+layout(1)
+# Create "method-set" factor and reorder as MatlabA,ThermaCamA, MatlabB, ThermaCamB
+timings[, methodSet := as.factor(paste(Method, "Set", Set))]
+timings$methodSet <- factor(timings$methodSet, levels = levels(timings$methodSet)[c(1,3,2,4)])
+lineValues <- timings[,.(mean = mean(secPerIm), sd = sd(secPerIm)), by = methodSet]
+
+# Reorder by slowest to fastest (workaround to get Manual method (Thermacam) first on graph)
+invMean <- function(x){1/mean(x)}
+timings$Method = with(timings, reorder(Method, secPerIm, invMean))
+
+p = position_dodge(0.4)
+
+# sig value variables
+yMid = 150
+yDiff = 5
+xDiff = 0.1
+yVals = c(yMid-yDiff, yMid, yMid, yMid-yDiff)
+xVals = c(-xDiff, -xDiff, xDiff, xDiff)
+
+speedPlot <- ggplot(timings, aes(x=Method, y=secPerIm, shape = methodSet)) + 
+  geom_point(size = 2, position = position_jitterdodge(jitter.width = 0.25, dodge.width = 0.4)) +
+  scale_shape_manual(values=c(1,19,2,17)) +
+  stat_summary(fun.data=mean_sdl, fun.args = list(mult=1),
+               geom="errorbar", color = "black", width = 0.15, position = p) +
+  stat_summary(fun.y = mean, fun.ymin= mean, fun.ymax = mean,
+               geom="errorbar", colour = "black", width = 0.2, position = p) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        legend.position = "none", axis.text=element_text(size=12, colour = "black"),
+        axis.ticks.length=unit(.2, "cm")) +
+  coord_cartesian(ylim = c(0,160), expand = F, clip = "off") +
+  scale_y_continuous("Seconds per image", breaks=seq(0,150,by=25)) +
+  scale_x_discrete(NULL, labels = c("Manual", "Semi-automated")) +
+  geom_segment(aes(x=0.766, xend = 0.766, y = 150.11, yend = 160, size = 2), color = "white") +
+  geom_path(aes(x=x, y=y), data = data.frame(x = xVals+1, y = yVals), inherit.aes = F) +
+  geom_path(aes(x=x, y=y), data = data.frame(x = xVals+2, y = yVals), inherit.aes = F) +
+  geom_path(aes(x=x, y=y), data = data.frame(x = c(1, 1, 2, 2), y = yVals+yDiff), inherit.aes = F) +
+  geom_label(x = 1.5, y = yMid+yDiff, label = "p<0.0001", label.size = NA, inherit.aes = F)
+
+# Reorder drawing so line segment over axis (to blank top part of line above 150)
+g <- ggplotGrob(speedPlot)
+g$layout$z[g$layout$name=="panel"] = 17
+
+jpeg(file="speed.jpg", width = 6000, height = 6000, res = 1200, quality = 100)
+grid.draw(g)
+dev.off()
+
+
+# Intra-analyser Variability by user (stats) ----------------------------------------------
+
+intrasd <- dt2[, .(avR = mean(temp_right), avL = mean(temp_left),
+                   sdR = sd.p(temp_right), sdL = sd.p(temp_left)),
+               by = c("name", "num","method","set")]
+intrasd[, methodSet := as.factor(paste0(method,set))]
+
+intrasd_excl <- dt2[, .(avR = mean(temp_right), avL = mean(temp_left),
+                        sdR = sd.p(temp_right), sdL = sd.p(temp_left)),
+                    by = c("name", "num","method","set")]
+intrasd_excl[, methodSet := as.factor(paste0(method,set))]
+intrasd_excl[name=="L01", ':=' (sdR=0, sdL=0)]
+
+fullR1_anova <- aov(sdR ~ method*set*name, data = intrasd)
+fullL1_anova <- aov(sdL ~ method*set*name, data = intrasd)
+saveResults('intra sd.P (full 3way).txt',
+            list('Right', summary(fullR1_anova), 'Left', summary(fullL1_anova)))
+
+setAr_anova <- aov(sdR ~ method*name, data = intrasd[set=="SetA"])
+setAl_anova <- aov(sdL ~ method*name, data = intrasd[set=="SetA"])
+setBr_anova <- aov(sdR ~ method*name, data = intrasd[set=="SetB"])
+setBl_anova <- aov(sdL ~ method*name, data = intrasd[set=="SetB"])
+saveResults('intra sd.P (full 2ways).txt',
+            list('Set A - right', summary(setAr_anova), 'Set B - right', summary(setBr_anova),
+                 'Set A - left' , summary(setAl_anova), 'Set B - left' , summary(setBl_anova)))
+
+fullR2_anova <- aov(sdR ~ method*set*name, data = intrasd[name!="L01"])
+fullL2_anova <- aov(sdL ~ method*set*name, data = intrasd[name!="L01"])
+saveResults('intra sd.P-exclude outlier (full 3way).txt',
+            list('Right', summary(fullR2_anova),
+                 '(Tukey)', TukeyHSD(fullR2_anova, which = c("method", "set")),
+                 'Left', summary(fullL2_anova),
+                 '(Tukey)', TukeyHSD(fullL2_anova, which = c("method", "set")),
+                 'Mean variation (sigma) by set and side',
+                 intrasd[name!="L01", .(right = mean(sdR), left = mean(sdL)), by=set]))
+
+setAr2_anova <- aov(sdR ~ method*name, data = intrasd[set=="SetA" & name!="L01"])
+setAl2_anova <- aov(sdL ~ method*name, data = intrasd[set=="SetA" & name!="L01"])
+setBr2_anova <- aov(sdR ~ method*name, data = intrasd[set=="SetB" & name!="L01"])
+setBl2_anova <- aov(sdL ~ method*name, data = intrasd[set=="SetB" & name!="L01"])
+saveResults('intra sd.P-exclude outlier (full 2ways).txt',
+            list('Set A - right', summary(setAr2_anova), 'Set B - right', summary(setBr2_anova),
+                 'Set A - left' , summary(setAl2_anova), 'Set B - left' , summary(setBl2_anova)))
+
+setAr3_anova <- aov(sdR ~ method+name, data = intrasd[set=="SetA" & name!="L01"])
+setAl3_anova <- aov(sdL ~ method+name, data = intrasd[set=="SetA" & name!="L01"])
+setBr3_anova <- aov(sdR ~ method+name, data = intrasd[set=="SetB" & name!="L01"])
+setBl3_anova <- aov(sdL ~ method+name, data = intrasd[set=="SetB" & name!="L01"])
+saveResults('intra sd.P-exclude outlier (main 2ways).txt',
+            list('Set A - right', summary(setAr3_anova), 'Set B - right', summary(setBr3_anova),
+                 'Set A - left' , summary(setAl3_anova), 'Set B - left' , summary(setBl3_anova)))
+
+highSigma <- intrasd_excl[which(intrasd_excl$sdL>0.1 | intrasd_excl$sdR>0.1),]
+highSigma <- highSigma[, c('name','num','method','set','sdR','sdL')]
+highSigma[, ':=' (name=as.numeric(name), set=gsub("Set","", set),
+                  method=gsub("Flir","M",method),
+                  sdR=round(sdR,3), sdL=round(sdL,3))]
+highSigma[, method:=gsub("Matlab","SA",method)]
+write.csv(highSigma,'intra (high variability sigma above 0.1).csv',row.names = F)
+
+# Intra-analyser Variability by user (graphs) ---------------------------------------------
+
+p <- position_dodge(0.9)
+w <- 0.5 #errorbar width
+s <- 0.5 # box line thickness
+s2 <- 1 # error bar line thickness
+
+theme_james <- theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                     panel.background = element_blank(),
+                     axis.line.y = element_line(colour = "black"),
+                     legend.position = "none",
+                     axis.text=element_text(size=11, colour = "black"),
+                     axis.ticks.length.x = unit(0, "cm"), 
+                     axis.ticks.length.y = unit(0.25, "cm"),
+                     axis.title.y = element_text(size = 13, margin = margin(r = 10)),
+                     axis.title.x = element_text(size = 13))
+
+methodColours <- c("red", "blue")
+
+upperbar <- function(x){mean(x)+sd(x)}
+lowerbar <- function(x){ifelse(mean(x)==0,0,0.001)}
+
+plotA <- ggplot(intrasd, aes(x=methodSet, y=sdR, fill = name)) +
+  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
+               geom="errorbar", colour = "black", width = w, position = p, size = s) +
+  geom_bar(position = p, stat = "summary", fun.y = mean) +
+  scale_fill_grey() +
+  labs(y = "Intra-analyser variation (right ROI)", x = "Method and set", tag = "A") +
+  coord_cartesian(ylim = c(0,0.35), expand = F) +
+  scale_x_discrete(NULL, labels = c("M (Set A)", "M (Set B)", "SA (Set A)", "SA (Set B)")) + 
+  scale_y_continuous(breaks = seq(0, 0.35, by = 0.05)) +
+  theme_james
+
+plotB <- ggplot(intrasd_excl, aes(x=methodSet, y=sdR, fill = name)) + 
+  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
+               geom="errorbar", colour = "black", width = w, position = p, size = s) +
+  geom_bar(position = p, stat = "summary", fun.y = mean) +
+  scale_fill_grey() +
+  labs(y = "Intra-analyser variation (right ROI)", x = "Method and set", tag = "B") +
+  coord_cartesian(ylim = c(0,0.125), expand = F) +
+  scale_x_discrete(NULL, labels = c("M (Set A)", "M (Set B)", "SA (Set A)", "SA (Set B)")) + 
+  scale_y_continuous(breaks = seq(0, 0.125, by = 0.025)) +
+  theme_james
+
+plotC <- ggplot(intrasd, aes(x=methodSet, y=sdL, fill = name)) +
+  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
+               geom="errorbar", colour = "black", width = w, position = p, size = s) +
+  geom_bar(position = p, stat = "summary", fun.y = mean) +
+  scale_fill_grey() +
+  labs(y = "Intra-analyser variation (left ROI)", x = "Method and set", tag = "C") +
+  coord_cartesian(ylim = c(0,0.35), expand = F) +
+  scale_x_discrete(NULL, labels = c("M (Set A)", "M (Set B)", "SA (Set A)", "SA (Set B)")) + 
+  scale_y_continuous(breaks = seq(0, 0.35, by = 0.05)) +
+  theme_james
+
+plotD <- ggplot(intrasd_excl, aes(x=methodSet, y=sdL, fill = name)) + 
+  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
+               geom="errorbar", colour = "black", width = w, position = p, size = s) +
+  geom_bar(position = p, stat = "summary", fun.y = mean) +
+  scale_fill_grey() +
+  labs(y= "Intra-analyser variation (left ROI)", x = "Method and set", tag = "D") +
+  coord_cartesian(ylim = c(0,0.125), expand = F) +
+  scale_x_discrete(NULL, labels = c("M (Set A)", "M (Set B)", "SA (Set A)", "SA (Set B)")) + 
+  scale_y_continuous(breaks = seq(0, 0.125, by = 0.025)) +
+  theme_james
+
+jpeg(file="intra-user by method & set (sd.P).jpg", width = 12000, height = 8000, res = 1200, quality = 100)
+grid.arrange(plotA, plotB, plotC, plotD, ncol=2)
+dev.off()
+
+# Inter-analyser variability by user (stats) ----------------------------------------------
+
+intersd <- dt2[visit=="Visit3", .(avR = mean(temp_right), avL = mean(temp_left),
+                                  sdR = sd.p(temp_right), sdL = sd.p(temp_left)),
+               by = c("num","method","set")]
+intersd <- intersd[, ':=' (graphID = as.factor(paste(set,method)))]
+
+
+fullR1_anova <- aov(sdR ~ method*set*num, data = intersd)
+fullL1_anova <- aov(sdL ~ method*set*num, data = intersd)
+saveResults('inter sd.P (full 3way).txt',
+            list('Right', summary(fullR1_anova), 'Left', summary(fullL1_anova)))
+
+
+setAr_anova <- aov(sdR ~ method*num, data = intersd[set=="SetA"])
+setAl_anova <- aov(sdL ~ method*num, data = intersd[set=="SetA"])
+setBr_anova <- aov(sdR ~ method*num, data = intersd[set=="SetB"])
+setBl_anova <- aov(sdL ~ method*num, data = intersd[set=="SetB"])
+saveResults('inter sd.P (full 2ways).txt',
+            list('Set A - right', summary(setAr_anova), 'Set B - right', summary(setBr_anova),
+                 'Set A - left' , summary(setAl_anova), 'Set B - left' , summary(setBl_anova)))
+
+## Exclude outlier
+intersd_excl <- dt2[visit=="Visit3" & name!='L01', .(avR = mean(temp_right), avL = mean(temp_left),
+                                                       sdR = sd.p(temp_right), sdL = sd.p(temp_left)),
+                    by = c("num","method","set")]
+intersd_excl <- intersd_excl[, ':=' (graphID = as.factor(paste(set,method)))]
+
+fullR2_anova <- aov(sdR ~ method*set*num, data = intersd_excl)
+fullL2_anova <- aov(sdL ~ method*set*num, data = intersd_excl)
+saveResults('inter sd.P-exclude outlier (full 3way).txt',
+            list('Right', summary(fullR2_anova), 
+                 '(Tukey)', TukeyHSD(fullR2_anova, which = c("method", "set")),
+                 'Left', summary(fullL2_anova),
+                 '(Tukey)', TukeyHSD(fullL2_anova, which = c("method", "set")),
+                 'Means by side and set',
+                 intersd_excl[, .(right = mean(sdR), left = mean(sdL)), by=set]))
+
+setAr2_anova <- aov(sdR ~ method*num, data = intersd_excl[set=="SetA"])
+setAl2_anova <- aov(sdL ~ method*num, data = intersd_excl[set=="SetA"])
+setBr2_anova <- aov(sdR ~ method*num, data = intersd_excl[set=="SetB"])
+setBl2_anova <- aov(sdL ~ method*num, data = intersd_excl[set=="SetB"])
+saveResults('inter sd.P-exclude outlier (full 2ways).txt',
+            list('Set A - right', summary(setAr2_anova), 'Set B - right', summary(setBr2_anova),
+                 'Set A - left' , summary(setAl2_anova), 'Set B - left' , summary(setBl2_anova)))
+
+
+# No sig interactions so run main effects model
+fullR3_anova <- aov(sdR ~ method+set+num, data = intersd_excl)
+fullL3_anova <- aov(sdL ~ method+set+num, data = intersd_excl)
+saveResults('inter sd.P-exclude outlier (main 3way).txt',
+            list('Right', summary(fullR3_anova), 
+                 '(Tukey)', TukeyHSD(fullR3_anova, which = c("method", "set")),
+                 'Left', summary(fullL3_anova),
+                 '(Tukey)', TukeyHSD(fullL3_anova, which = c("method", "set"))))
+
+setAr3_anova <- aov(sdR ~ method+num, data = intersd_excl[set=="SetA"])
+setAl3_anova <- aov(sdL ~ method+num, data = intersd_excl[set=="SetA"])
+setBr3_anova <- aov(sdR ~ method+num, data = intersd_excl[set=="SetB"])
+setBl3_anova <- aov(sdL ~ method+num, data = intersd_excl[set=="SetB"])
+saveResults('inter sd.P-exclude outlier (main 2ways).txt',
+            list('Set A - right', summary(setAr3_anova), 'Set B - right', summary(setBr3_anova),
+                 'Set A - left' , summary(setAl3_anova), 'Set B - left' , summary(setBl3_anova)))
+
+# Save highly variable results
+highSigma <- intersd_excl[which(intersd_excl$sdL>0.1 | intersd_excl$sdR>0.1),]
+highSigma <- highSigma[, c('num','method','set','sdR','sdL')]
+highSigma[, ':=' (set=gsub("Set","", set),
+                  method=gsub("Flir","M",method),
+                  sdR=round(sdR,3), sdL=round(sdL,3))]
+highSigma[, method:=gsub("Matlab","SA",method)]
+write.csv(highSigma,'inter (high variability sigma above 0.1).csv',row.names = F)
+
+
+# Inter-analyser Variability by user (graphs) ---------------------------------------------
+
+plotA <- ggplot(intersd, aes(x=set, y=sdR, fill = method, color = method)) + 
+  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
+               geom="errorbar", colour = "black", width = w, position = p, size = s2) +
+  geom_bar(position = p, stat = "summary", fun.y = mean, size= s) +
+  scale_fill_manual(values = c("black","white")) +
+  scale_color_manual(values = c("black", "black")) +
+  labs(y= "Inter-analyser variation (right ROI)", tag = "A") +
+  coord_cartesian(ylim = c(0,0.35), expand = F) +
+  scale_y_continuous(breaks=seq(0,0.35,by=0.05)) +
+  theme_james
+
+plotB <- ggplot(intersd_excl, aes(x=set, y=sdR, fill = method, color = method)) + 
+  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
+               geom="errorbar", colour = "black", width = w, position = p, size = s2) +
+  geom_bar(position = p, stat = "summary", fun.y = mean, size= s) +
+  scale_fill_manual(values = c("black","white")) +
+  scale_color_manual(values = c("black", "black")) +
+  labs(y= "Inter-analyser variation (right ROI)", tag = "B") +
+  coord_cartesian(ylim = c(0,0.125), expand = F) +
+  scale_y_continuous(breaks=seq(0,0.125,by=0.025)) +
+  theme_james
+
+plotC <- ggplot(intersd, aes(x=set, y=sdL, fill = method, color = method)) + 
+  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
+               geom="errorbar", colour = "black", width = w, position = p, size = s2) +
+  geom_bar(position = p, stat = "summary", fun.y = mean, size= s) +
+  scale_fill_manual(values = c("black","white")) +
+  scale_color_manual(values = c("black", "black")) +
+  labs(y= "Inter-analyser variation (left ROI)", tag = "C") +
+  coord_cartesian(ylim = c(0,0.35), expand = F) +
+  scale_y_continuous(breaks=seq(0,0.35,by=0.05)) +
+  theme_james
+
+plotD <- ggplot(intersd_excl, aes(x=set, y=sdL, fill = method, color = method)) + 
+  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
+               geom="errorbar", colour = "black", width = w, position = p, size = s2) +
+  geom_bar(position = p, stat = "summary", fun.y = mean, size = s) +
+  scale_fill_manual(values = c("black","white")) +
+  scale_color_manual(values = c("black", "black")) +
+  labs(y= "Inter-analyser variation (left ROI)", tag = "D") +
+  coord_cartesian(ylim = c(0,0.125), expand = F) +
+  scale_y_continuous(breaks=seq(0,0.125,by=0.025)) +
+  theme_james
+
+jpeg(file="inter-user by method & set (sd.P).jpg", width = 12000, height = 8000, res = 1200, quality = 100)
+grid.arrange(plotA, plotB, plotC, plotD, ncol=2)
+dev.off()
