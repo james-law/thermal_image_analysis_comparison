@@ -1,0 +1,72 @@
+# Takes input as folder containing csv files saved by FLIR ThermaCam software.
+# Runs QC check on files/images (are all expected files present, does left = right for any)
+# Processes files to give 95th percentile and number of pixels for each image.
+
+rm(list = ls())
+require(data.table)
+split_path <- function(x) if (dirname(x)==x) x else c(basename(x),split_path(dirname(x)))
+
+# select folder and import csv files
+folder <- choose.dir()
+setwd(folder)
+files <- dir(folder, pattern = ".csv")
+files <- files[grep("output1",files, invert = TRUE)]
+files <- files[grep("output_av1",files, invert = TRUE)]
+
+# check filenames (csv) are as expected from original thermal images
+thermalImages <- dir(folder, pattern = "jpg") # Get original thermal image names
+thermalNums <- gsub("[Vv]isit[123]","",thermalImages) #Remove Visit1 or Visit2 if used in filenames (visit details taken from folder path later)
+thermalNums <- as.numeric(gsub("[^0-9]", "", thermalNums)) #...and capture the number of each TI
+
+fileCheck <- gsub("[Vv]([Ii][Ss][Ii][Tt])?0?[123]","",files) # Remove Visit1 or Visit2 if used in filenames (visit details taken from folder path later)
+fileCheck <- gsub("[^1-9]*([0-9]*)(.*)\\.csv$","\\1\\2",fileCheck) # Leave just numbers and left/right of csv files
+fileCheck <- gsub("[ \\._-]", "", fileCheck) # Remove potential additional characters
+
+fileCheck <- gsub("[Ll]$", "left", fileCheck) # change L,l,Left to left and ditto for right
+fileCheck <- gsub("[Rr]$", "right", fileCheck)
+fileCheck <- gsub("Left", "left", fileCheck)
+fileCheck <- gsub("Right", "right", fileCheck)
+fileCheck <- gsub("^0([1-9].*)", "\\1", fileCheck)
+
+set <- split_path(folder)[1] # which set is this
+set <- gsub(" ", "", gsub("(^Set*.[ABab]).*", "\\1", set))
+visit <- gsub(" ", "", gsub("Comparison-", "", split_path(folder)[2]))
+name <- gsub("Comparison-", "", split_path(folder)[3])
+imageNum <- as.numeric(gsub("[^0-9]","", fileCheck)) # a list of images numbers
+imageSide <- gsub("[^a-zA-Z]","", fileCheck) # a list of ROI side
+imageSide <- gsub("^L$", "left", imageSide)
+imageSide <- gsub("^R$", "right", imageSide)
+if (!isTRUE(all.equal(sort(c(paste0(thermalNums, "left"), paste0(thermalNums, "right"))), sort(fileCheck)))){
+  print("Check filenames correct")
+  print(all.equal(sort(c(paste0(thermalNums, "left"), paste0(thermalNums, "right"))), sort(fileCheck)))
+  check = data.table(TIs = sort(c(paste0(thermalNums, "left"), paste0(thermalNums, "right"))),
+                     User = sort(fileCheck),
+                     Check = sort(c(paste0(thermalNums, "left"), paste0(thermalNums, "right")))==sort(fileCheck))
+  print(check[Check == FALSE,])
+  
+}
+
+# Import csv file and calculate 95th percentile and size (no. of pixels in ROI)
+# Save as output with image name and side.
+images <- lapply(files, 1, FUN = read.csv) # import images
+TSCR95 <- sapply(images, quantile, probs = 0.95, na.rm = TRUE) # calculate 95th percentile
+size <- sapply(images, function(x) sum(!is.na(x))) # size of ROI (pixels)
+
+output <- data.table(set = set, visit = visit, name = name, num = imageNum, side = imageSide,
+                     temp = TSCR95, size = size)
+# Recast table so left ROI column and right ROI column
+output <- dcast(output, set + name + visit + num ~ side, value.var = c("temp", "size"))
+setorder(output, num)
+
+# Check if left = right for temp + size
+if (sum(output$size_left == output$size_right)!=0  | is.na(sum(output$size_left == output$size_right))){
+  print("The following images have equal left and right sizes")
+  print(output$num[which(output$size_left == output$size_right)])
+}
+
+# Save output to OneDrive.
+if (isTRUE(all.equal(sort(c(paste0(thermalNums, "left"), paste0(thermalNums, "right"))), sort(fileCheck)))){
+  outFileName <- paste0("Flir_", visit, " ", set, "_", name, ".csv")
+  folderOut <- choose.dir()
+  write.csv(output, file = file.path(folderOut,outFileName), row.names = FALSE)
+}
