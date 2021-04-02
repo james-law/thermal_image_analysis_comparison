@@ -1,0 +1,63 @@
+# Takes input as folder containing csv files saved by Matlab thermal image analysis code.
+# Checks if columns set, name and visit are present and, if not, appends them to the file.
+
+rm(list = ls())
+require(data.table)
+split_path <- function(x) if (dirname(x)==x) x else c(basename(x),split_path(dirname(x)))
+
+# select folder and filenames. Split filename to identify study session details
+master <- choose.dir()
+inputFolder <- "Matlab output files/"
+outputFolder <- "Results"
+setwd(paste0(master,inputFolder))
+fileNames <- dir(pattern = "^Matlab.*csv$") # Get files ready to convert
+fileNamesOut <- dir(paste0(master,outputFolder), pattern = "^Matlab.*csv$") # Get files already converted
+fileNames <- fileNames[!fileNames %in% fileNamesOut] # Exclude those already converted (to avoid repeat conversions)
+fileParts <- strsplit(fileNames, "_")
+visitSet <- sapply(lapply(fileParts, "[[", 2), FUN = strsplit, split = " ")
+visit <- lapply(visitSet, "[[", 1)
+set <- lapply(visitSet, "[[", 2)
+name <- gsub(".csv", "", lapply(fileParts, "[[", 3))
+rm(list = c("fileParts", "visitSet"))
+
+# Import csv filenames and column names
+imports <- lapply(fileNames, 1, FUN = read.csv)
+columns <- lapply(imports, FUN = names)
+
+# define output variable and columns to be kept from original Matlab output
+output <- list()
+columns2Keep <- c("median.R.10", "median.L.10", "X95thPC.R.", "X95thPC.L.")
+for (i in 1:length(fileNames)){
+      if(columns[[i]][1] == "filename"){
+            imageNum <- gsub("[Vv]isit[1|2|3]_?","",imports[[i]]$filename) #Remove Visit1 or visit2 or visit3
+            imageNum <- as.numeric(gsub("[^0-9]", "", imageNum)) #Then remove remaining non-numeric characters
+            temp <- data.table(imports[[i]])
+            temp <- temp[,names(temp) %in% columns2Keep, with = FALSE]
+            # change col names to match Flir output col names
+            names(temp) <- gsub("median.R.10", "temp_right", names(temp))
+            names(temp) <- gsub("X95thPC.R.", "temp_right", names(temp))
+            names(temp) <- gsub("median.L.10", "temp_left", names(temp))
+            names(temp) <- gsub("X95thPC.L.", "temp_left", names(temp))
+            output[[i]] <- data.table(set = set[[i]][1],
+                                      name = name[[i]][1],
+                                      visit = visit[[i]][1],
+                                      num = imageNum,
+                                      temp)
+      }else if(columns[[i]][1] == "set"){
+            output[[i]] <- imports[[i]]
+            temp <- c()
+      }else{
+            print(paste("Error in file",fileNames[i]))
+            stop()
+      }
+      
+}
+rm(list = c("temp", "i"))
+
+# order output by image number
+lapply(output, FUN = setorder, num)
+
+# Save output
+for (i in 1:length(fileNames)){
+      write.csv(output[[i]], file = paste0(master,"Results/",fileNames[i]), row.names = FALSE)
+}
