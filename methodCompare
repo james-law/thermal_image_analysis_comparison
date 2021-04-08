@@ -113,7 +113,7 @@ rm(dtV1_A,dtV1_B,dtV2V3)
 
 
 # Efficiency --------------------------------------------------------------
-setwd('../Output')
+setwd('../Output (post reviewers)')
 
 eff_anova <- aov(secPerIm ~ Method*Set, data = timings)
 saveResults('efficiency anova (with interaction).txt', summary(eff_anova))
@@ -155,7 +155,7 @@ speedPlot <- ggplot(timings, aes(x=Method, y=secPerIm, shape = methodSet)) +
   scale_shape_manual(values=c(1,19,2,17)) +
   stat_summary(fun.data=mean_sdl, fun.args = list(mult=1),
                geom="errorbar", color = "black", width = 0.15, position = p) +
-  stat_summary(fun.y = mean, fun.ymin= mean, fun.ymax = mean,
+  stat_summary(fun = mean, fun.min= mean, fun.max = mean,
                geom="errorbar", colour = "black", width = 0.2, position = p) +
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
         panel.background = element_blank(), axis.line = element_line(colour = "black"),
@@ -258,13 +258,8 @@ theme_james <- theme(panel.grid.major = element_blank(), panel.grid.minor = elem
 
 methodColours <- c("red", "blue")
 
-upperbar <- function(x){mean(x)+sd(x)}
-lowerbar <- function(x){ifelse(mean(x)==0,0,0.001)}
-
 plotA <- ggplot(intrasd, aes(x=methodSet, y=sdR, fill = name)) +
-  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
-               geom="errorbar", colour = "black", width = w, position = p, size = s) +
-  geom_bar(position = p, stat = "summary", fun.y = mean) +
+  geom_boxplot() +
   scale_fill_grey() +
   labs(y = "Intra-analyser variation (right ROI)", x = "Method and set", tag = "A") +
   coord_cartesian(ylim = c(0,0.35), expand = F) +
@@ -272,41 +267,35 @@ plotA <- ggplot(intrasd, aes(x=methodSet, y=sdR, fill = name)) +
   scale_y_continuous(breaks = seq(0, 0.35, by = 0.05)) +
   theme_james
 
-plotB <- ggplot(intrasd_excl, aes(x=methodSet, y=sdR, fill = name)) + 
-  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
-               geom="errorbar", colour = "black", width = w, position = p, size = s) +
-  geom_bar(position = p, stat = "summary", fun.y = mean) +
-  scale_fill_grey() +
-  labs(y = "Intra-analyser variation (right ROI)", x = "Method and set", tag = "B") +
-  coord_cartesian(ylim = c(0,0.125), expand = F) +
-  scale_x_discrete(NULL, labels = c("M (Set A)", "M (Set B)", "SA (Set A)", "SA (Set B)")) + 
-  scale_y_continuous(breaks = seq(0, 0.125, by = 0.025)) +
-  theme_james
+# plotB <- ggplot(intrasd_excl, aes(x=methodSet, y=sdR, fill = name)) + 
+#   geom_boxplot() +
+#   scale_fill_grey() +
+#   labs(y = "Intra-analyser variation (right ROI)", x = "Method and set", tag = "B") +
+#   #coord_cartesian(ylim = c(0,0.125), expand = F) +
+#   scale_x_discrete(NULL, labels = c("M (Set A)", "M (Set B)", "SA (Set A)", "SA (Set B)")) + 
+#   #scale_y_continuous(breaks = seq(0, 0.125, by = 0.025)) +
+#   theme_james
 
-plotC <- ggplot(intrasd, aes(x=methodSet, y=sdL, fill = name)) +
-  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
-               geom="errorbar", colour = "black", width = w, position = p, size = s) +
-  geom_bar(position = p, stat = "summary", fun.y = mean) +
+plotB <- ggplot(intrasd, aes(x=methodSet, y=sdL, fill = name)) +
+  geom_boxplot() +
   scale_fill_grey() +
-  labs(y = "Intra-analyser variation (left ROI)", x = "Method and set", tag = "C") +
+  labs(y = "Intra-analyser variation (left ROI)", x = "Method and set", tag = "B") +
   coord_cartesian(ylim = c(0,0.35), expand = F) +
   scale_x_discrete(NULL, labels = c("M (Set A)", "M (Set B)", "SA (Set A)", "SA (Set B)")) + 
   scale_y_continuous(breaks = seq(0, 0.35, by = 0.05)) +
   theme_james
+# 
+# plotD <- ggplot(intrasd_excl, aes(x=methodSet, y=sdL, fill = name)) + 
+#   geom_boxplot() +
+#   scale_fill_grey() +
+#   labs(y= "Intra-analyser variation (left ROI)", x = "Method and set", tag = "D") +
+#  # coord_cartesian(ylim = c(0,0.125), expand = F) +
+#   scale_x_discrete(NULL, labels = c("M (Set A)", "M (Set B)", "SA (Set A)", "SA (Set B)")) + 
+#   #scale_y_continuous(breaks = seq(0, 0.125, by = 0.025)) +
+#   theme_james
 
-plotD <- ggplot(intrasd_excl, aes(x=methodSet, y=sdL, fill = name)) + 
-  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
-               geom="errorbar", colour = "black", width = w, position = p, size = s) +
-  geom_bar(position = p, stat = "summary", fun.y = mean) +
-  scale_fill_grey() +
-  labs(y= "Intra-analyser variation (left ROI)", x = "Method and set", tag = "D") +
-  coord_cartesian(ylim = c(0,0.125), expand = F) +
-  scale_x_discrete(NULL, labels = c("M (Set A)", "M (Set B)", "SA (Set A)", "SA (Set B)")) + 
-  scale_y_continuous(breaks = seq(0, 0.125, by = 0.025)) +
-  theme_james
-
-jpeg(file="intra-user by method & set (sd.P).jpg", width = 12000, height = 8000, res = 1200, quality = 100)
-grid.arrange(plotA, plotB, plotC, plotD, ncol=2)
+jpeg(file="intra-user by method & set (sd.P).jpg", width = 12000, height = 5000, res = 1200, quality = 100)
+grid.arrange(plotA, plotB, ncol=2)
 dev.off()
 
 # Inter-analyser variability by user (stats) ----------------------------------------------
@@ -385,48 +374,44 @@ write.csv(highSigma,'inter (high variability sigma above 0.1).csv',row.names = F
 
 # Inter-analyser Variability by user (graphs) ---------------------------------------------
 
+ymin1 <- 0
+ymax1 <- 0.35
+yby1 <- 0.05
+
 plotA <- ggplot(intersd, aes(x=set, y=sdR, fill = method, color = method)) + 
-  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
-               geom="errorbar", colour = "black", width = w, position = p, size = s2) +
-  geom_bar(position = p, stat = "summary", fun.y = mean, size= s) +
+  geom_boxplot() +
   scale_fill_manual(values = c("black","white")) +
   scale_color_manual(values = c("black", "black")) +
-  labs(y= "Inter-analyser variation (right ROI)", tag = "A") +
-  coord_cartesian(ylim = c(0,0.35), expand = F) +
-  scale_y_continuous(breaks=seq(0,0.35,by=0.05)) +
+  labs(y= "Inter-analyser variation (right ROI)", x = "Set", tag = "A") +
+  coord_cartesian(ylim = c(0, ymax1), expand = F) +
+  scale_y_continuous(breaks=seq(0,ymax1,by=yby1)) +
   theme_james
 
 plotB <- ggplot(intersd_excl, aes(x=set, y=sdR, fill = method, color = method)) + 
-  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
-               geom="errorbar", colour = "black", width = w, position = p, size = s2) +
-  geom_bar(position = p, stat = "summary", fun.y = mean, size= s) +
+  geom_boxplot() +
   scale_fill_manual(values = c("black","white")) +
   scale_color_manual(values = c("black", "black")) +
-  labs(y= "Inter-analyser variation (right ROI)", tag = "B") +
-  coord_cartesian(ylim = c(0,0.125), expand = F) +
-  scale_y_continuous(breaks=seq(0,0.125,by=0.025)) +
+  labs(y= "Inter-analyser variation (right ROI)", x = "Set", tag = "B") +
+  coord_cartesian(ylim = c(0, ymax1), expand = F) +
+  scale_y_continuous(breaks=seq(0,ymax1,by=yby1)) +
   theme_james
 
 plotC <- ggplot(intersd, aes(x=set, y=sdL, fill = method, color = method)) + 
-  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
-               geom="errorbar", colour = "black", width = w, position = p, size = s2) +
-  geom_bar(position = p, stat = "summary", fun.y = mean, size= s) +
+  geom_boxplot() +
   scale_fill_manual(values = c("black","white")) +
   scale_color_manual(values = c("black", "black")) +
-  labs(y= "Inter-analyser variation (left ROI)", tag = "C") +
-  coord_cartesian(ylim = c(0,0.35), expand = F) +
-  scale_y_continuous(breaks=seq(0,0.35,by=0.05)) +
+  labs(y= "Inter-analyser variation (left ROI)", x = "Set", tag = "C") +
+  coord_cartesian(ylim = c(0, ymax1), expand = F) +
+  scale_y_continuous(breaks=seq(0,ymax1,by=yby1)) +
   theme_james
 
 plotD <- ggplot(intersd_excl, aes(x=set, y=sdL, fill = method, color = method)) + 
-  stat_summary(fun.y = mean, fun.ymin= lowerbar, fun.ymax = upperbar,
-               geom="errorbar", colour = "black", width = w, position = p, size = s2) +
-  geom_bar(position = p, stat = "summary", fun.y = mean, size = s) +
+  geom_boxplot() +
   scale_fill_manual(values = c("black","white")) +
   scale_color_manual(values = c("black", "black")) +
-  labs(y= "Inter-analyser variation (left ROI)", tag = "D") +
-  coord_cartesian(ylim = c(0,0.125), expand = F) +
-  scale_y_continuous(breaks=seq(0,0.125,by=0.025)) +
+  labs(y= "Inter-analyser variation (left ROI)", x = "Set", tag = "D") +
+  coord_cartesian(ylim = c(0, ymax1), expand = F) +
+  scale_y_continuous(breaks=seq(0,ymax1,by=yby1)) +
   theme_james
 
 jpeg(file="inter-user by method & set (sd.P).jpg", width = 12000, height = 8000, res = 1200, quality = 100)
